@@ -1,0 +1,1419 @@
+---
+title: "Predykcja dochodów z wykorzystaniem metod uczenia maszynowego"
+author: "Jakub Sornat, Maciej Tajs"
+date: "2025-01-16"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    df_print: kable
+    code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, python.reticulate = TRUE)
+
+library(reticulate)
+
+library(kableExtra)
+
+
+# Ścieżka do Pythona
+use_python("C:/Users/Sornat/AppData/Local/Programs/Python/Python310/python.exe")
+
+
+```
+
+# Wstęp
+
+Zbiór danych "Adult" jest jednym z klasycznych zestawów danych używanych w dziedzinie uczenia maszynowego, szczególnie w kontekście klasyfikacji binarnej. Dane te zostały pierwotnie wyodrębnione z bazy danych spisu powszechnego z 1994 roku przez US Census Bureau. Celem zestawu jest przewidywanie, czy dochód osoby przekracza 50 tysięcy dolarów rocznie na podstawie szeregu cech demograficznych i ekonomicznych, takich jak wiek, edukacja, status małżeński, czy liczba godzin pracy tygodniowo. Zbiór ten zawiera 48 842 obserwacje oraz 14 atrybutów, w tym 6 ciągłych i 8 nominalnych. Analiza tych danych stanowi interesujące wyzwanie ze względu na nierównomierne rozkłady klas oraz obecność braków danych w niektórych atrybutach.
+
+W projekcie wykorzystane zostaną współczesne metody eksploracyjnej analizy danych (EDA) oraz techniki uczenia maszynowego w celu przeprowadzenia skutecznej klasyfikacji. Projekt będzie również uwzględniał aspekty interpretowalności modelu, co pozwoli na lepsze zrozumienie wpływu poszczególnych zmiennych na przewidywaną zmienną docelową.
+
+**Cel pracy**:
+
+Celem niniejszej pracy jest opracowanie skutecznego modelu klasyfikacyjnego do przewidywania poziomu dochodu (>50K lub <=50K) na podstawie dostarczonego zbioru danych "Adult". Aby osiągnąć ten cel, praca skupi się na kilku kluczowych etapach:
+
+**Eksploracyjna analiza danych (EDA)**: Przeprowadzenie wstępnej analizy, w tym opisanie i wizualizacja danych, obliczenie podstawowych statystyk oraz zbadanie relacji między zmiennymi niezależnymi a zmienną docelową.
+
+**Przygotowanie danych**: Zajęcie się brakami danych, wartościami odstającymi oraz potencjalną modyfikacją zmiennych, tak aby dane były odpowiednie do użycia w modelach uczenia maszynowego.
+
+**Uczenie maszynowe**: Zastosowanie przynajmniej trzech różnych algorytmów klasyfikacyjnych, w tym SVM oraz drzew decyzyjnych, w celu porównania ich efektywności.
+
+**Ocena wyników**: Analiza jakości klasyfikacji oraz interpretowalności najlepszego modelu przy użyciu narzędzi takich jak wykresy ceteris-paribus, wykresy częściowej zależności czy wartości SHAP.
+
+**Wnioski**: Sformułowanie wniosków dotyczących skuteczności zastosowanych metod oraz znaczenia poszczególnych zmiennych dla przewidywania dochodu.
+
+Praca ma na celu nie tylko opracowanie skutecznego modelu, ale również dogłębne zrozumienie danych oraz praktyczne zastosowanie metod eksploracyjnych i modelowania. 
+
+# Eksploracyjna analiza i przygotowanie danych
+
+## Import niezbędnych bibliotek
+
+Do przeprowadzenia analizy danych i budowy modeli klasyfikacyjnych wykorzystano szeroki zestaw bibliotek:
+
+- **Pandas**
+- **NumPy**
+- **Matplotlib i Seaborn**
+- **Scikit-learn** 
+- **Plotly**
+- **GridSearchCV**
+- **StandardScaler**
+
+```{python}
+import pandas as pd
+import numpy as np
+from IPython.display import Markdown as md # type: ignore
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split 
+from sklearn.linear_model import LogisticRegression 
+from sklearn.metrics import confusion_matrix, recall_score, accuracy_score, roc_auc_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import ConfusionMatrixDisplay
+from sklearn.tree import plot_tree
+from utils import *
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import roc_curve, auc
+from IPython.display import display
+import plotly.express as px
+import shap
+from scipy.stats import skew
+from scipy.stats import pointbiserialr, spearmanr, pearsonr
+```
+
+## Dodatkowe funkcje
+
+Na potrzeby projektu zostału również stworzone dodatkowe funkcje, które miały za zadanie przyspieszenie i zautomatyzowanie częsci obliczeniowych
+
+```{python}
+def specificity_score(y_true, y_pred):
+    # Generowanie macierzy pomyłek
+    cm = confusion_matrix(y_true, y_pred)
+    
+    # Rozpakowanie wartości z macierzy pomyłek
+    tn, fp, fn, tp = cm.ravel()
+    
+    # Obliczenie specyficzności
+    return tn / (tn + fp)
+```
+
+## Analiza danych
+
+Poniższa tabela pokazuje surowy zbiór danych, które będą obiektem analizy. W dalszych etapacch zostaną one przeanalizowane i nastepnie odpowiednio przygotowane w celu stworzonenia możliwie najlepszych modeli klasyfikacyjnych 
+
+```{python}
+income_data = pd.read_csv("datasets/income.csv")
+# Eksport danych do R
+r.income_data = income_data
+```
+
+```{r echo=FALSE, message=TRUE, paged.print=TRUE}
+income_data %>%
+  head(10) %>%
+  kable("html", caption = "Income Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(2)
+```
+
+### Opis cech
+
+-   **age** - wiek osoby, wartość liczby naturalnej.
+-   **workclass** - jeden z 7 typów pracy.
+-   **fnlwgt** - liczba osób, które łączyła kombinacja pozostałych cech, wartość liczby naturalnej.
+-   **education** - zmienna jakościowa nominalna, słownie wyrażająca jeden z 16 poziomów edukacji. Zostanie odrzucona, ponieważ pokrywa się w 100% z cechą **educational-num**.
+-   **educational-num** - zmienna jakościowa nominalna wyrażająca poziom edukacji liczbowo, obejmująca 16 poziomów.
+-   **marital-status** - stan cywilny, wyrażony w postaci jednej z 7 klas.
+-   **occupation** - typ zawodu, jedna z 14 klas.
+-   **relationship** - zmienna opisująca relację z innymi osobami. Istnieje spora szansa, że pokrywa się z **marital-status**, w związku z czym jedna z tych cech może zostać odrzucona.
+-   **race** - rasa człowieka, podzielona na: czarną, białą, azjatycką/pacyficzną, Indian/Inuitów oraz inną.
+-   **sex** - płeć osoby.
+-   **capital-gain** - zysk kapitałowy, wartość liczby naturalnej.
+-   **capital-loss** - strata kapitałowa, wartość liczby naturalnej.
+-   **hours-per-week** - liczba godzin przepracowanych tygodniowo, wartość liczby naturalnej.
+-   **native-country** - kraj pochodzenia. Zostanie sprowadzona do zmiennej binarnej, przyjmującej wartość 1 dla osób z rodowodem amerykańskim oraz 0 dla imigrantów.
+-   **income** - zmienna objaśniana, opisująca, czy osoba zarabia mniej, czy więcej niż 50 000 dolarów rocznie.
+
+Zbiór danych składa się z 48842 obserwacji złożonych z 15 cech, które zostały wypisane poniżej:
+
+```{python}
+print(', '.join(income_data.columns) )
+```
+Zmienne kategoryczne składają się z następujących elementów:
+
+- zmienna **workclass**:
+
+```{python}
+income_data['workclass'].unique()
+```
+
+- zmienna **education**:
+
+```{python}
+income_data['education'].unique()
+```
+
+- zmienna **marital-status**:
+
+```{python}
+income_data['marital-status'].unique()
+```
+
+- zmienna **occupation**:
+
+```{python}
+income_data['occupation'].unique()
+```
+
+- zmienna **relationship**:
+
+```{python}
+income_data['relationship'].unique()
+```
+
+- zmienna **race**:
+
+```{python}
+income_data['race'].unique()
+```
+
+### Badanie korelacji pomiędzy education a educational-num oraz marital-status i relationship
+
+```{python}
+education_crosstab = pd.crosstab(income_data['education'], income_data['educational-num'])
+education_crosstab
+```
+
+Zmienne education oraz educational-num przekazują dokładnie te same informacje, wobec tego education zostanie odrzucona.
+
+```{python}
+income_data = income_data.drop('education', axis = 1)
+```
+
+```{python}
+mari_rel_crosstab = pd.crosstab(income_data['marital-status'], income_data['relationship'])
+mari_rel_crosstab
+```
+
+```{python}
+print("V Cramera: " + str(cramers_v(mari_rel_crosstab)))
+```
+
+Wartość V wskazuje na silną zależność pomiędzy zmiennymi relationship a marital-status, wobec tego zmienna relationship zostanie odrzucona.
+
+```{python}
+income_data = income_data.drop("relationship", axis = 1)
+```
+
+## Wstępna transformacja zmiennych
+
+Pierwotny zbiór danych zawiera pytajniki w postaci stringa jako braki danych, zostanią one zastąpione wartościami NaN, tak by można było z nimi łatwiej pracować
+
+```{python}
+income_data.replace('?', np.nan, inplace=True)
+```
+
+```{python}
+income_data['native-country'].value_counts()
+```
+
+Przytłaczająca większość obserwacji zawiera USA jako kraj pochodzenia, zmienna native-country zostanie sporwadzona do zmiennej binarnej native-american przyjmującej 1 dla natywnych Amerykan oraz 0 dla imigrantów.
+
+```{python}
+income_data['native-american'] = income_data['native-country'].apply(
+    lambda x: 1 if x == 'United-States' else (0 if pd.notnull(x) else np.nan)
+)
+income_data = income_data.drop('native-country', axis = 1)
+```
+
+Zmienne capital-gain oraz capital-loss zostaną zastąpione pojedynczą zmienną - capital-net
+
+```{python}
+income_data['capital-net'] = income_data['capital-gain'] - income_data['capital-loss']
+income_data = income_data.drop(['capital-gain', 'capital-loss'], axis = 1)
+```
+
+
+### Podstawowe statystyki opisowe
+
+```{python}
+quantitive_cols = ['age', 'fnlwgt', 'capital-net', 'hours-per-week']
+ordinal_cols = ['educational-num', 'income']
+categorical_cols = ['workclass', 'marital-status', 'occupation', 'race', 'gender', 'native-american']
+
+variable_stats = []
+for quantitive in quantitive_cols:
+    variable_stats.append(describe_variable(income_data[quantitive], 'quantitive', quantitive))
+variable_stats.append(describe_variable(income_data['educational-num'], 'ordinal', 'educational-num'))
+for categorical in categorical_cols:
+    variable_stats.append(describe_variable(income_data[categorical], 'categorical', categorical))
+    
+variable_statsDF = pd.DataFrame(variable_stats).set_index("index")
+variable_statsDF.T
+```
+
+### Rozkład zmiennej objaśnianej
+
+```{python}
+percent_counts = income_data['income'].value_counts(normalize=True) * 100
+
+plt.bar(percent_counts.index, percent_counts.values)
+plt.title('Procentowy udzial klasy income')
+plt.xlabel('Wartosc target')
+plt.ylabel('Procentowy udzial (%)')
+plt.ylim(0, 100)  
+plt.show()
+```
+
+Wykres pokazuje wyraźne niezbalansowanie danych - około 3/4 rekordów zawiera dochody mniejsze niż 50 tysięcy.
+
+### Rozkłady zmiennych kategorycznych
+
+```{python}
+def show_categoricals():
+    categorical_colsX = categorical_cols[:-1]
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
+    axes = axes.flatten()
+    for i, col in enumerate(categorical_colsX):
+        if i < len(axes):  
+            sns.countplot(data=income_data, x=col, ax=axes[i])
+            axes[i].set_title(f'{col}')
+            axes[i].set_xlabel('')  
+            axes[i].set_ylabel('Liczba rekordow')
+            axes[i].tick_params(axis='x', rotation=90) 
+            
+    for j in range(len(categorical_colsX), len(axes)):
+        fig.delaxes(axes[j])
+    
+    plt.tight_layout()
+    plt.show()
+show_categoricals()
+```
+
+#### Zmienne:
+
+-   **workclass** - występuje tutaj jedna dominująca klasa private oraz 2 klasy które niemal nie występują - without-pay oraz never-worked. By poradzić sobie z problemem niezbalansowania tej zmiennej, klasy zostaną połączone. local-gov, federal-gov oraz state-gov trafią do wspólnej klasy gov. Pozostałe klasy oprócz private trafią do kategorii rare
+-   **marital-status** - w tej zmiennej kategorycznej dominują dwie klasy - never-married oraz married-civ-spouse. Rekordów z pozostałymi klasami jest znacznie mniej, jednak łączy je fakt okresowej lub permanentnej nieobecności małżonka - zostaną one połączone w klasę separated.
+-   **race** - biała rasa stanowi znaczną większość rekordów, około 10% to rasa czarna, około 5% stanowią inne rasy, które zostaną połączone w klasę other
+-   **gender** - płeć w około 66% rekordów to mężczyzna
+-   **native-american** - imigranci stanowią około 10% rekordów
+
+### Operacje na zmiennych kategorycznych
+
+**Workclass**
+
+```{python}
+income_data['workclass'] = income_data['workclass'].replace(
+    {'Local-gov': 'other', 'Federal-gov': 'gov', 'Without-pay': 'gov'}
+)
+```
+
+```{python}
+income_data['workclass'] = income_data['workclass'].replace(
+    {'Self-emp-not-inc': 'Other', 'Self-emp-inc': 'Other', 'State-gov': 'Other', 'Never-worked': 'Other'}
+)
+```
+
+**Marital-status**
+
+```{python}
+income_data['marital-status'] = income_data['marital-status'].replace(
+    {'Widowed': 'Separated', 'Divorced': 'Separated', 'Married-spouse-absent': 'Separated', 'Married-AF-spouse': 'Separated'}
+)
+```
+
+**Race**
+
+```{python}
+income_data['race'] = income_data['race'].replace(
+    {'Asian-Pac-Islander': 'Other', 'Amer-Indian-Eskimo': 'Other'}
+)
+```
+
+### Zmienne kategoryczne po modyfikacjach
+
+```{python}
+show_categoricals()
+```
+
+Ilość klas dla poszczególnych zmiennych kategorycznych została zredukowana do maksymalnie trzech, za wyjątkiem zmiennej occupation, dla której ciężko byłoby o logiczny podział, dlatego przed metodami ML zostanie wykorzystany target-encoding, podczas gdy dla pozostałych zmiennych zostanie zastosowany one-hot-encoding.
+
+### Rozkład zmiennej porządkowej educational-num
+
+```{python}
+plt.figure(figsize=(10, 6))
+sns.countplot(data=income_data, x='educational-num')
+plt.title('Liczba rekordów dla poszczególnych poziomów edukacji')
+plt.xlabel('educational-num')
+plt.ylabel('Liczba rekordów')
+plt.show()
+```
+
+### Rozkłady zmiennych ilościowych oraz ich transformacje
+
+```{python}
+fig, axes = plt.subplots(1, len(quantitive_cols), figsize=(15, 5), sharey=False)
+
+for i, col in enumerate(quantitive_cols):
+    sns.boxplot(data=income_data, y=col, ax=axes[i])
+    axes[i].set_title(f'{col}')
+    axes[i].set_ylabel('')
+
+plt.tight_layout()
+plt.show()
+```
+
+Zmienna age wydaje się być niemal gotowa do wykorzystania metod klasyfikacyjnych - drobnym problemem mogą być pojedyncze outliery.
+
+W przypadku zmiennej fnlwgt występuje ogromna ilość outlierów, być może ma ona nawet rozkład bimodalny.
+
+```{python}
+def kdeplot(var):
+    sns.kdeplot(data=income_data, x=var, fill=True)
+
+    plt.title(f"Rozkład gęstości {var}")
+    plt.xlabel("Wartości")
+    plt.ylabel("Gęstość")
+    
+    plt.show()
+```
+
+
+```{python}
+kdeplot("fnlwgt")
+```
+
+
+Szczęśliwie, prognozy okazały się zbyt pesymistyczne - rozkład tej zmiennej jest co prawda mocno przesunięty w prawo i będzie wymagał dodatkowej pracy z danymi, ale nie jest bimodalny, co mogłoby sugerować 2 grupy wśród obserwacji i znaczne skomplikowanie przygotowania danych.
+
+```{python}
+print(skew(income_data['fnlwgt']))
+```
+
+```{python}
+fnl_mean = income_data['fnlwgt'].mean()
+fnl_std = income_data['fnlwgt'].std()
+fnl_upper_bound = fnl_mean + 3 * fnl_std
+```
+
+
+```{python}
+fnl_outliers = income_data[income_data['fnlwgt'] >= fnl_upper_bound]
+print(fnl_outliers.shape)
+print(fnl_outliers[fnl_outliers['income'] == '>50K'].shape)
+```
+
+Wśród rekordów, które w głównej mierze powodują skośność dodatnią stosunek zarabiających więcej niż 50000 do tych zarabiających mniej niż 50000 odpowiada temu w całym zbiorze - na tej podstawie usunięcie tych danych prawdopodobnie nie zaszkodzi ogólnej jakości prognoz.
+
+```{python}
+income_data = income_data[income_data['fnlwgt'] < fnl_upper_bound]
+print(skew(income_data['fnlwgt']))
+```
+
+Po tej operacji wciąż występuje prawostronna skośność, jest ona jednak na znacznie bardziej akceptowalnym poziomie.
+
+```{python}
+kdeplot("fnlwgt")
+```
+
+
+```{python}
+kdeplot("capital-net")
+```
+
+
+```{python}
+print(skew(income_data['capital-net']))
+```
+
+Podobnie jak w przypadku zmiennej fnlwgt występuje tutaj dodatnia skośność. Analogicznie zbadane zostanie, czy wśród outlierów stosunek wartości zmiennej objaśnianej jest zachowany.
+
+```{python}
+capital_mean = income_data['capital-net'].mean()
+capital_std = income_data['capital-net'].std()
+capital_upper_bound = capital_mean + 3 * capital_std
+capital_outliers = income_data[income_data['capital-net'] >= capital_upper_bound]
+print(capital_outliers.shape)
+print(capital_outliers[capital_outliers['income'] == '>50K'].shape)
+```
+
+
+W przypadku zmiennej capital-net wśród outlierów stosunek osób zarabiających więcej niż 50000 do zarabiających mniej jest znacznie wyższy, niż w całym zbiorze danych. Usunięcie wartości mogłoby znacznie pogorszyć jakość przyszłych prognoz. Zamiast tego zastosowana zostanie transformacja logarytmiczna, która przy zachowaniu rekordów pozwoli na zmniejszenie poziomu dodatniej skośności.
+
+```{python}
+income_data = income_data.copy()
+income_data['capital-net'] = np.sign(income_data['capital-net']) * np.log1p(abs(income_data['capital-net']))
+```
+
+
+```{python}
+print(skew(income_data['capital-net']))
+```
+
+Skośność wciąż występuje, jednak została ona znacznie zredukowana.
+
+```{python}
+kdeplot("capital-net")
+```
+
+
+Jest to rozkład trójmodalny, co może potencjalnie powodować problemy podczas korzystania z niektórych metod klasyfikacyjnych.
+
+```{python}
+kdeplot("hours-per-week")
+```
+
+```{python}
+print(skew(income_data['hours-per-week']))
+```
+
+
+W przypadku hours-per-week poziom skośnosci jest akceptowalny już dla pierwotnych wartości zmiennej. 
+
+
+```{python}
+hours_mean = income_data['hours-per-week'].mean()
+hours_std = income_data['hours-per-week'].std()
+hours_upper_bound = hours_mean + 3 * hours_std
+hours_lower_bound = hours_mean - 3 * hours_std
+hours_outliers_upper = income_data[income_data['hours-per-week'] >= hours_upper_bound]
+hours_outliers_lower = income_data[income_data['hours-per-week'] <= hours_lower_bound]
+```
+
+```{python}
+upper_count = hours_outliers_upper.shape[0]
+upper_high_income = hours_outliers_upper[hours_outliers_upper['income'] == '>50K'].shape[0]
+lower_count= hours_outliers_lower.shape[0]
+lower_high_income = hours_outliers_lower[hours_outliers_lower['income'] == '>50K'].shape[0]
+print(f"Odsetek zarobków wynoszących więcej niż 50000 wśród górnych outlierów: {upper_high_income/upper_count}")
+print(f"Odsetek zarobków wynoszących więcej niż 50000 wśród dolnych outlierów: {lower_high_income/lower_count}")
+```
+
+Widzimy tutaj zależność, której można się domyślić intuicyjnie - osoby więcej pracujące znacznie częsciej zarabiają więcej - proste pozbycie się tych outlierów mogłoby pozbawić przyszłe modele wartościowych informacji. By zredukować ewentualny negatywny wpływ wartości odstających wykorzystana zostanie transformacja logarytmiczna.
+
+```{python}
+income_data = income_data.copy()
+income_data['hours-per-week-log'] = np.log1p(income_data['hours-per-week'])
+income_data = income_data.drop('hours-per-week', axis=1)
+```
+
+### Mapowanie zmiennej objaśnianej
+
+Zmienna objaśniania zostanła zmapowana na wartości zero i jeden.
+
+```{python}
+income_data['income'] = income_data['income'] == '>50K'
+income_data['income'] = income_data['income'].astype(int)
+```
+
+### Braki danych
+
+```{python}
+income_data.isna().sum()
+```
+
+
+```{python}
+missing_mask = income_data.isnull().any(axis=1)
+income_data_with_missing = income_data[missing_mask]
+len(income_data_with_missing) / len(income_data)
+```
+
+
+Obserwacje z brakami stanowią 7% całego zbioru danych, jest to niewielki odsetek, więc obserwacje z brakami zostaną odrzucone.
+
+```{python}
+income_data = income_data.dropna()
+```
+
+### Korelacja pomiędzy zmiennymi
+
+W celu wyboru zmiennych, które trafią do ostatecznego zbioru danych, gotowego do klasyfikacji zbadana zostanie korelacja pomiędzy zmiennymi.
+
+```{python}
+corr_income_data = income_data.copy()
+for col in categorical_cols:
+    corr_income_data[col], mapping = pd.factorize(corr_income_data[col])
+```
+
+```{python}
+corr_income_data
+```
+
+```{python}
+correlation_methods = {
+    'nominal:nominal': cramer_v_two_cols,
+    'nominal:ordinal': cramer_v_two_cols,
+    'nominal:quantitative': point_biserial,
+
+    'ordinal:nominal': cramer_v_two_cols,
+    'ordinal:ordinal': spearman,
+    'ordinal:quantitative': spearman,
+
+    'quantitative:nominal': point_biserial,
+    'quantitative:ordinal': spearman,
+    'quantitative:quantitative': pearson
+}
+
+quantitive_cols = ['age', 'fnlwgt', 'capital-net', 'hours-per-week-log']
+
+def get_different_correlations(corr_income_data):
+    corr_dict = {}
+    
+    for col in corr_income_data.columns:
+        for col_2 in corr_income_data.columns:
+            col_str = ""
+            if col in quantitive_cols:
+                col_str += "quantitative"
+            if col in ordinal_cols:
+                col_str += "ordinal"
+            if col in categorical_cols:
+                col_str += "nominal"
+            if col_2 in quantitive_cols:
+                col_str += ":quantitative"
+            if col_2 in ordinal_cols:
+                col_str += ":ordinal"
+            if col_2 in categorical_cols:
+                col_str += ":nominal"
+            corr_dict[(col,col_2)] = abs(correlation_methods[col_str](corr_income_data[col], corr_income_data[col_2]))
+    return corr_dict
+
+corr_dict = get_different_correlations(corr_income_data)
+
+corr_matrix = dict_to_corr_matrix(corr_dict)
+
+def plot_corr_heatmap(corr_matrix):
+    # Tworzenie heatmapy
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr_matrix, 
+                annot=True,           
+                fmt=".2f",     
+                cbar=True,            
+                square=True)          
+    plt.title("Korelacja pomiędzy zmiennymi", fontsize=16)
+    plt.show()
+
+plot_corr_heatmap(corr_matrix)
+```
+
+Zauważamy, że duża część zmiennych nie wykazuje korelacji ze zmienną objaśnianą - income. Wobec tego zostaną one usunięte ze zbioru danych.
+
+```{python}
+corr_income_data = corr_income_data.drop(['fnlwgt', 'native-american','race', 'workclass'],axis = 1)
+corr_dict = get_different_correlations(corr_income_data)
+corr_matrix = dict_to_corr_matrix(corr_dict)
+plot_corr_heatmap(corr_matrix)
+```
+
+
+Po wstępnym odrzuceniu zmiennych ze względu na niską korelację ze zmienną objaśnianą należy odrzucić zmienne, objaśniane, które wykazują zbyt dużą korelację między sobą. Wartość rzucająca się w oczy to 0.47 między marital-status i age, jednak te zmienne wykazują jedne z wyższych korelacji ze zmienną income, mogą okazać się bardzo ważne w kontekście jakości prognoz. Pozostaną więc w ostatecznym zbiorze.
+
+
+```{python}
+income_data = income_data.drop(['fnlwgt', 'native-american','race', 'workclass'],axis = 1)
+```
+
+### Encoding zmiennych kategorycznych
+
+Wszystkie zmienne kategoryczne zostaną zakodowane w celu wydajniejszego operowania nimi podczas badania.
+
+```{python}
+income_data = apply_one_hot_encoding(income_data, ['occupation', 'marital-status'])
+income_data['male'] = income_data['gender'] == 'Male'
+income_data['male'] = income_data['male'].astype(int)
+income_data = income_data.drop('gender', axis = 1)
+income_data = undersample_data(income_data, 'income')
+```
+```{python}
+income_data.to_csv("prepared_income.csv")
+```
+
+
+
+# Zastosowanie techink uczenia maszynowego
+
+W ramach badania zastosowano trzy techniki uczenia maszynowego: **algorytm k-NN**, **regresję logistyczną** oraz **metodę lasów losowych**. Dla każdej z tych metod przeprowadzono estymację modelu z podstawowymi parametrami, a następnie za pomocą **GridSearchCV** przeprowadzono wyszukiwanie optymalnych parametrów. Po znalezieniu najlepszych parametrów dla każdej techniki dokonano wyboru najlepszego modelu i przeprowadzono ocenę jego jakości na zbiorach uczącym oraz testowym.  
+
+Celem analizy jest ocena, jak dobrze model radzi sobie z klasyfikowaniem danych na podstawie najlepszych parametrów.
+
+
+**Predykcja**
+
+Pierwszym krokiem w procesie oceny modelu jest wykonanie predykcji na dwóch zbiorach danych:
+
+- **Zbiór uczący**  – oceniamy, jak dobrze model nauczył się klasyfikować dane, na których był trenowany.  
+- **Zbiór testowy** – oceniamy, jak dobrze model generalizuje do nowych, niewidzianych wcześniej danych.
+
+
+
+**Metryki oceny modelu**
+
+W kolejnym kroku obliczane są istotne metryki oceny dla obu zbiorów danych:
+
+- **Accuracy** (dokładność) – stosunek liczby poprawnie sklasyfikowanych próbek do całkowitej liczby próbek.  
+- **Recall** (czułość) – stosunek liczby prawdziwie pozytywnych klasyfikacji do liczby wszystkich próbek pozytywnych.  
+- **Specificity** (specyficzność) – stosunek liczby prawdziwie negatywnych klasyfikacji do liczby wszystkich próbek negatywnych.  
+
+Metryki te dostarczają wszechstronnych informacji o jakości klasyfikacji, zarówno pod kątem poprawności przewidywań, jak i radzenia sobie z nierównowagą klas.
+
+---
+
+**Macierz konfuzji**
+
+Dla obu zbiorów danych generowana jest **macierz konfuzji**, która przedstawia liczbę:
+
+- Prawdziwych pozytywów (**TP**),  
+- Prawdziwych negatywów (**TN**),  
+- Fałszywych pozytywów (**FP**),  
+- Fałszywych negatywów (**FN**).  
+
+Macierz konfuzji umożliwia bardziej szczegółową analizę jakości klasyfikacji.
+
+
+**Wizualizacja macierzy konfuzji**
+
+Macierze konfuzji są przedstawiane w formie wykresów, które wizualnie prezentują jakość klasyfikacji. Pozwalają one łatwo ocenić skuteczność modelu w rozpoznawaniu pozytywnych i negatywnych próbek w obu zbiorach danych.
+
+
+Po wykonaniu tych kroków, w tym obliczeniu metryk oraz wygenerowaniu wizualizacji, uzyskujemy kompleksowy obraz skuteczności modelu. Taka analiza umożliwia porównanie jakości działania modelu na zbiorze uczącym i testowym oraz ocenę jego zdolności do generalizowania na nowe dane.
+
+**Krzywa ROC i wartość AUC**
+
+Dodatkowo aby ocenić jakość naszego najlepszego modelu, wykorzystano wykres **ROC (Receiver Operating Characteristic)**.Na wykresie oś X reprezentuje **False Positive Rate (FPR)**, czyli stosunek fałszywych pozytywnych wyników do wszystkich negatywnych przypadków, a oś Y reprezentuje **True Positive Rate (TPR)**, czyli stosunek prawdziwych pozytywnych wyników do wszystkich pozytywnych przypadków.
+Im wyższa krzywa i im bardziej znajduje się w lewym górnym rogu wykresu, tym lepszy jest model.
+
+Dodatkowo, **AUC (Area Under the Curve)** to miara powierzchni pod krzywą ROC, która daje ogólną ocenę jakości modelu.
+AUC mieści się w przedziale od 0 do 1, gdzie wartość bliska 1 wskazuje na bardzo dobry model, a wartość 0.5 oznacza model, który działa na poziomie losowego zgadywania.
+
+
+## Przygotowanie zbioru
+
+```{python}
+data = pd.read_csv("prepared_income.csv", sep=',')
+data = data.drop(columns = 'Unnamed: 0')
+income_column = data.pop('income')
+data['income'] = income_column
+data
+```
+
+### Podział na zbiór uczący i testowy
+
+Dzielimy nasz zbiór danych na zbiór uczący i zbiór testowy w proporcji.
+Dane uczące będą stanowiłły 80% całego zbioru.
+
+```{python}
+X = data.iloc[:, :-1]
+y = data.income
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+```
+
+### Standaryzacja
+
+Przeprowadzamy standaryzacje danych.
+Okaże się ona pomocna przy stosowaniu metod regresji logistycznej i KNN
+
+```{python}
+# Standaryzacja danych
+columns_to_scale = ['age', 'educational-num', 'hours-per-week-log', 'capital-net']
+# Tworzenie kopii tylko dla kolumn do skalowania
+X_train_scaled = X_train.copy()
+X_test_scaled = X_test.copy()
+
+# Skalowanie tylko wybranych kolumn
+scaler = StandardScaler()
+X_train_scaled[columns_to_scale] = scaler.fit_transform(X_train[columns_to_scale])
+X_test_scaled[columns_to_scale] = scaler.transform(X_test[columns_to_scale])
+```
+
+## Metoda K najbliższych sąsiadów
+
+Algorytm K-Nearest Neighbors (KNN) jest jedną z najprostszych i najbardziej intuicyjnych metod klasyfikacji w uczeniu maszynowym.
+Polega na przypisaniu klasy obiektu na podstawie klas jego najbliższych sąsiadów w przestrzeni cech.
+Zasada działania KNN opiera się na mierzeniu odległości pomiędzy punktami w przestrzeni cech, a następnie klasyfikowaniu obiektu do tej samej klasy, do której należy większość jego sąsiadów.
+
+### Model z bazowymi warotściami parametrów
+
+```{python}
+# Trening modelu
+knn_model_basic = KNeighborsClassifier(n_neighbors=3)
+knn_model_basic.fit(X_train_scaled, y_train)
+
+# Predykcja na zbiorze uczącym
+y_train_pred_knn_basic = knn_model_basic.predict(X_train_scaled)
+
+# Predykcja na zbiorze testowym
+y_test_pred_knn_basic = knn_model_basic.predict(X_test_scaled)
+
+# Obliczenie miar dla zbioru uczącego
+accuracy_knn_train = accuracy_score(y_train, y_train_pred_knn_basic)
+recall_knn_train = recall_score(y_train, y_train_pred_knn_basic)
+specificity_knn_train = recall_score(y_train, y_train_pred_knn_basic, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Obliczenie miar dla zbioru testowego
+accuracy_knn_test = accuracy_score(y_test, y_test_pred_knn_basic)
+recall_knn_test = recall_score(y_test, y_test_pred_knn_basic)
+specificity_knn_test = recall_score(y_test, y_test_pred_knn_basic, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Wyświetlenie metryk w tabeli
+metrics_data_knn = {
+    'Metric': ['Accuracy', 'Recall', 'Specificity'],
+    'Train': [accuracy_knn_train, recall_knn_train, specificity_knn_train],
+    'Test': [accuracy_knn_test, recall_knn_test, specificity_knn_test]
+}
+
+metrics_df_knn = pd.DataFrame(metrics_data_knn)
+print(metrics_df_knn)
+
+# Wyświetlenie macierzy konfuzji
+conf_matrix_knn_train = confusion_matrix(y_train, y_train_pred_knn_basic)
+conf_matrix_knn_test = confusion_matrix(y_test, y_test_pred_knn_basic)
+
+# Tworzenie wykresów dla macierzy konfuzji
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+# Wyświetlanie macierzy konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_knn_train).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train Set')
+
+# Wyświetlanie macierzy konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_knn_test).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test Set')
+
+plt.tight_layout()
+plt.show()
+
+plt.close(fig)
+
+```
+
+Model posiada dokładność i specyficzność  na poziomie 77%. Czułość oscyluje w granicach 78%. Lepsze wyniki na zbiorze treningowym mogą świadczyć o nieznacznym przeuczeniu.
+
+### Szukanie najlepszych parametrów dla metody KNN
+
+W algorytmie KNN kluczowym elementem wpływającym na jakość klasyfikacji są wybrane parametry.
+Aby uzyskać najlepsze wyniki, należy dostosować odpowiednio kilka z nich.
+Przeprowadzono wyszukiwanie najlepszych parametrów KNN, aby zoptymalizować jego działanie na danych.
+
+**Parametry do przeszukania:**
+
+1.  **`n_neighbors` (Liczba sąsiadów)**\
+    Parametr ten określa, ilu sąsiadów będzie branych pod uwagę przy klasyfikacji nowego obiektu.
+    Optymalna wartość zależy od charakterystyki danych.
+    Zbyt mała liczba sąsiadów może prowadzić do nadmiernego dopasowania modelu (przeuczenie), podczas gdy zbyt duża liczba może spowodować zbyt ogólne przypisanie klasy (niedouczenie).\
+    W naszym przypadku zrezygnowaliśmy z tego parametru w bieżącej wersji, ponieważ nasz wybór parametrów koncentruje się na innych aspektach.
+
+2.  **`metric` (Metryka odległości)**\
+    Metryka odległości decyduje o tym, jak mierzymy podobieństwo pomiędzy obiektami w przestrzeni cech.
+    Dla KNN typowe metryki to:
+
+    -   **`euclidean`** (odległość euklidesowa) – najczęściej stosowana metryka, odpowiada tradycyjnej odległości w przestrzeni kartezjańskiej.
+    -   **`manhattan`** (odległość Manhattan) – sumuje różnice pomiędzy współrzędnymi, może być bardziej odpowiednia dla danych o nieliniowych zależnościach.
+    -   **`minkowski`** – ogólna forma, która pozwala na stosowanie różnych wartości parametru p, co daje możliwość modyfikacji funkcji odległości.\
+        W tym przypadku również zrezygnowaliśmy z tego parametru, koncentrując się na innych, bardziej kontrolowanych aspektach modelu.
+
+3.  **`weights` (Waga sąsiadów)**\
+    Parametr ten definiuje sposób ważenia sąsiadów w procesie klasyfikacji:
+
+    -   **`uniform`** – wszyscy sąsiedzi mają równą wagę.
+    -   **`distance`** – sąsiedzi bliżsi obiektowi mają większą wagę, co może poprawić wyniki klasyfikacji w przypadku nierównomiernie rozłożonych danych.\
+        W tym przypadku również nie przeprowadziliśmy przeszukiwania na tym parametrze, ponieważ zależało nam na innych czynnikach.
+
+4.  **`p` (Parametr p w metryce Minkowskiego)**\
+    Parametr ten określa wartość, która kontroluje sposób obliczania odległości w metryce Minkowskiego:
+
+    -   **`p=1`** – odpowiada metryce Manhattan, gdzie odległość oblicza się jako sumę wartości bezwzględnych różnic pomiędzy współrzędnymi.
+    -   **`p=2`** – odpowiada metryce Euklidesowej, gdzie odległość oblicza się jako pierwiastek z sumy kwadratów różnic pomiędzy współrzędnymi.\
+        W tym projekcie postanowiliśmy przeprowadzić przeszukiwanie dla tego parametru, aby zoptymalizować wybór odpowiedniej metryki odległości w zależności od charakterystyki danych.
+
+Wynikiem przeszukiwania będzie zestaw najlepszych parametrów, który pozwoli na uzyskanie najlepszego modelu KNN dla tego zestawu danych.
+
+```{python}
+# Definicja modelu
+knn = KNeighborsClassifier()
+
+# Zakres parametrów do przeszukania
+param_grid = {
+    'n_neighbors': [3, 5, 9, 15],  # Liczba sąsiadów
+    'metric': ['euclidean', 'manhattan', 'minkowski'],  # Metryka odległości
+    'weights': ['uniform', 'distance'],  # Waga sąsiadów
+    'p': [1, 2]  # Parametr p w metryce Minkowskiego (1 - Manhattan, 2 - Euclidean)
+}
+
+# GridSearchCV - wyszukiwanie najlepszych parametrów
+grid_search = GridSearchCV(estimator=knn, param_grid=param_grid,verbose=1,  cv=5, scoring='accuracy')
+
+# Dopasowanie modelu
+grid_search.fit(X_train_scaled, y_train)
+
+# Najlepsze parametry
+print("Najlepsze parametry: ", grid_search.best_params_)
+
+# Najlepszy wynik (dokładność)
+print("Najlepszy wynik (accuracy): ", grid_search.best_score_)
+
+
+```
+
+### Ocena modelu KNN na zbiorach uczącym i testowym dla najlepszych parametrów
+
+```{python}
+best_knn_model = grid_search.best_estimator_
+# Predykcja na zbiorze uczącym i testowym z najlepszymi parametrami
+y_train_pred_knn_best = best_knn_model.predict(X_train_scaled)  # Predykcja na zbiorze uczącym
+y_test_pred_knn_best = best_knn_model.predict(X_test_scaled)  # Predykcja na zbiorze testowym
+
+# Obliczenie metryk dla obu zbiorów
+accuracy_train_knn_best = accuracy_score(y_train, y_train_pred_knn_best)
+recall_train_knn_best = recall_score(y_train, y_train_pred_knn_best)
+specificity_train_knn_best = recall_score(y_train, y_train_pred_knn_best, pos_label=0)  # Specificity = TN / (TN + FP)
+
+accuracy_test_knn_best = accuracy_score(y_test, y_test_pred_knn_best)
+recall_test_knn_best = recall_score(y_test, y_test_pred_knn_best)
+specificity_test_knn_best = recall_score(y_test, y_test_pred_knn_best, pos_label=0)
+
+# Zapisanie wyników w tabeli
+metrics_df_knn = pd.DataFrame({
+    'Metric': ['Accuracy', 'Recall', 'Specificity'],
+    'Train': [accuracy_train_knn_best, recall_train_knn_best, specificity_train_knn_best],
+    'Test': [accuracy_test_knn_best, recall_test_knn_best, specificity_test_knn_best]
+})
+
+# Wyświetlenie tabeli z metrykami
+print(metrics_df_knn)
+
+# Wyświetlenie macierzy konfuzji dla obu zbiorów (uczacy i testowy)
+conf_matrix_train_knn_best = confusion_matrix(y_train, y_train_pred_knn_best)
+conf_matrix_test_knn_best = confusion_matrix(y_test, y_test_pred_knn_best)
+
+# Tworzenie wykresów dla macierzy konfuzji
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+# Wyświetlanie macierzy konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_train_knn_best).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train Set')
+
+# Wyświetlanie macierzy konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_test_knn_best).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test Set')
+
+plt.tight_layout()
+plt.show()
+```
+
+Model wykazuje wysoką wydajność zarówno na zbiorze uczącym, jak i testowym, co sugeruje, że dobrze generalizuje do nowych danych.
+Czułość jest na wysokim poziomie, co oznacza, że model dobrze wykrywa pozytywne przypadki. Swoistość jest nieco niższa, co może wskazywać, że model preferuje klasyfikowanie próbek pozytywnych kosztem negatywnych, ale nie ma to większego wpływu na ogólną jakość modelu, biorąc pod uwagę wyniki.
+
+### Krzywa ROC i AUC
+
+```{python}
+# Obliczenie prawdopodobieństw klasy pozytywnej dla zbioru testowego
+y_prob_knn_test_best = best_knn_model.predict_proba(X_test_scaled)[:, 1]
+
+# Obliczenie krzywej ROC dla zbioru testowego
+fpr_knn_test_best, tpr_knn_test_best, thresholds_knn_test_best = roc_curve(y_test, y_prob_knn_test_best)
+
+# Obliczenie AUC dla zbioru testowego
+roc_auc_knn_test_best = auc(fpr_knn_test_best, tpr_knn_test_best)
+
+# Wykres krzywej ROC z wypełnieniem pod krzywą
+plt.figure(figsize=(8, 6))
+# Wypełnienie pod krzywą ROC
+plt.fill_between(fpr_knn_test_best, tpr_knn_test_best, color='skyblue', alpha=0.4)
+# Wykres krzywej ROC
+plt.plot(fpr_knn_test_best, tpr_knn_test_best, color='b', lw=2, label=f'ROC curve (AUC = {roc_auc_knn_test_best:.2f})')
+# Linia losowa
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')
+# Dodanie etykiet
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve - Best KNN Model (Test Set)')
+# Dodanie legendy
+plt.legend(loc='lower right')
+# Dodanie siatki
+plt.grid(True)
+# Wyświetlenie wykresu
+plt.show()
+```
+
+## Regresja Logistyczna
+
+Regresja logistyczna jest metodą klasyfikacyjną używaną do przewidywania prawdopodobieństwa przynależności do jednej z dwóch klas.
+Zamiast modelować wartość ciągłą, jak w przypadku regresji liniowej, regresja logistyczna wykorzystuje funkcję logistyczną (sigmoid), która przekształca wynik liniowy w prawdopodobieństwo w przedziale [0, 1].
+
+### Regresja logistyczna z domyślnymi parametrami dla funckji LogisticRegression
+
+```{python}
+# Trening modelu
+log_reg_basic = LogisticRegression(random_state=42)
+log_reg_basic.fit(X_train_scaled, y_train)
+
+# Predykcja na zbiorze testowym
+y_pred_log_reg_basic_test = log_reg_basic.predict(X_test_scaled)
+
+# Predykcja na zbiorze uczącym
+y_pred_log_reg_basic_train = log_reg_basic.predict(X_train_scaled)
+
+# Metryki oceny dla zbioru testowego
+accuracy_log_reg_test = accuracy_score(y_test, y_pred_log_reg_basic_test)
+recall_log_reg_test = recall_score(y_test, y_pred_log_reg_basic_test, pos_label=1)
+specificity_log_reg_test = specificity_score(y_test, y_pred_log_reg_basic_test)
+auc_score_test = roc_auc_score(y_test, log_reg_basic.predict_proba(X_test_scaled)[:, 1])
+
+# Metryki oceny dla zbioru uczącego
+accuracy_log_reg_train = accuracy_score(y_train, y_pred_log_reg_basic_train)
+recall_log_reg_train = recall_score(y_train, y_pred_log_reg_basic_train, pos_label=1)
+specificity_log_reg_train = specificity_score(y_train, y_pred_log_reg_basic_train)
+auc_score_train = roc_auc_score(y_train, log_reg_basic.predict_proba(X_train_scaled)[:, 1])
+
+metrics_data = {
+    'Metric': ['Accuracy', 'Recall', 'Specificity', 'AUC'],
+    'Train': [accuracy_log_reg_train, recall_log_reg_train, specificity_log_reg_train, auc_score_train],
+    'Test': [accuracy_log_reg_test, recall_log_reg_test, specificity_log_reg_test, auc_score_test]
+}
+
+metrics_df = pd.DataFrame(metrics_data)
+print(metrics_df)
+
+# Wyświetlenie macierzy konfuzji
+conf_matrix_log_reg_train = confusion_matrix(y_train, y_pred_log_reg_basic_train)
+conf_matrix_log_reg_test = confusion_matrix(y_test, y_pred_log_reg_basic_test)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Macierz konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_log_reg_train).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train')
+
+# Macierz konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_log_reg_test).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test')
+
+plt.tight_layout()
+plt.show()
+
+```
+
+W przypadku regresji liniowej model z podstawowymi parametrami charakteryzuje się lepszymi warotściami miar w porównaniu z metodą KNN. Wyniki na zbiorze uczącym i testowym świadczą o dobrym generalizowaniu danych.
+
+### Szukanie najbardziej optymalnych parametrów przy pomocy funkcji GridSearchCV
+
+Parametry, które badamy w tym przypadku to:
+
+-   **`C`** – odwrotność siły regularizacji:
+    -   Parametr **`C`** kontroluje stopień karania dużych współczynników modelu. Mniejsza wartość **`C`** oznacza silniejszą regularizację, co pomaga uniknąć przeuczenia, ale może ograniczać elastyczność modelu. Większa wartość **`C`** umożliwia modelowi lepsze dopasowanie do danych, jednak może prowadzić do przeuczenia, zwłaszcza gdy dane są szumne.
+-   **`max_iter`** – liczba iteracji w procesie dopasowywania:
+    -   Parametr **`max_iter`** określa maksymalną liczbę iteracji, które algorytm będzie wykonywał w procesie optymalizacji. Wyższa wartość **`max_iter`** pozwala algorytmowi na dłuższą pracę, co może być przydatne w przypadku bardziej złożonych danych, które wymagają więcej cykli, by uzyskać optymalne wyniki. Zbyt mała wartość może spowodować, że algorytm nie osiągnie zbieżności.
+
+```{python}
+# Parametry do przeszukania
+# Parametry do przeszukania
+param_grid = {
+    'C': [0.1, 1, 10],  # Inverse of regularization strength
+    'max_iter': [1000, 3000, 5000],  # Liczba iteracji w procesie dopasowywania
+}
+# Tworzenie obiektu LogisticRegression
+log_reg_model = LogisticRegression(random_state=42)
+
+# GridSearchCV do wyszukiwania najlepszych parametrów
+grid_search = GridSearchCV(log_reg_model, param_grid, cv=None, verbose=4, scoring='accuracy', n_jobs=7)
+grid_search.fit(X_train, y_train)
+
+# Najlepsze parametry
+best_params = grid_search.best_params_
+best_score = grid_search.best_score_
+
+# Model z najlepszymi parametrami
+best_log_reg_model = LogisticRegression(**best_params, random_state=42)
+best_log_reg_model.fit(X_train, y_train)
+
+print('Best parameters from GridSearchCV:', best_params)
+```
+
+### Ocena modelu dla najlepszych parametrów
+
+Podobnie jak poprzednio ocenimy model z najlepszymi parametrami
+
+```{python}
+# Predykcja na zbiorze testowym
+y_pred_log_reg_best_test = best_log_reg_model.predict(X_test)
+
+# Predykcja na zbiorze uczącym
+y_pred_log_reg_best_train = best_log_reg_model.predict(X_train)
+
+# Obliczenie miar dla zbioru testowego
+accuracy_log_reg_best_test = accuracy_score(y_test, y_pred_log_reg_best_test)
+recall_log_reg_best_test = recall_score(y_test, y_pred_log_reg_best_test)
+specificity_log_reg_best_test = recall_score(y_test, y_pred_log_reg_best_test, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Obliczenie miar dla zbioru uczącego
+accuracy_log_reg_best_train = accuracy_score(y_train, y_pred_log_reg_best_train)
+recall_log_reg_best_train = recall_score(y_train, y_pred_log_reg_best_train)
+specificity_log_reg_best_train = recall_score(y_train, y_pred_log_reg_best_train, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Wyświetlenie metryk w tabeli
+metrics_data_log_reg_best = {
+    'Metric': ['Accuracy', 'Recall', 'Specificity'],
+    'Train': [accuracy_log_reg_best_train, recall_log_reg_best_train, specificity_log_reg_best_train],
+    'Test': [accuracy_log_reg_best_test, recall_log_reg_best_test, specificity_log_reg_best_test]
+}
+
+metrics_df_log_reg_best = pd.DataFrame(metrics_data_log_reg_best)
+print(metrics_df_log_reg_best)
+
+# Wyświetlenie macierzy konfuzji
+conf_matrix_log_reg_best_train = confusion_matrix(y_train, y_pred_log_reg_best_train)
+conf_matrix_log_reg_best_test = confusion_matrix(y_test, y_pred_log_reg_best_test)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Macierz konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_log_reg_best_train).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train')
+
+# Macierz konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_log_reg_best_test).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test')
+
+plt.show()
+```
+
+Wyszukanie najlepszych parametrow tylko nieznacznie zmieniło wartości miar.
+
+### Krzywa ROC i AUC
+
+```{python}
+# Obliczenie prawdopodobieństw klasy pozytywnej dla zbioru testowego
+y_prob_log_reg_best_test = best_log_reg_model.predict_proba(X_test)[:, 1]
+
+# Obliczenie krzywej ROC dla zbioru testowego
+fpr_log_reg_test, tpr_log_reg_test, thresholds_log_reg_test = roc_curve(y_test, y_prob_log_reg_best_test)
+
+# Obliczenie AUC dla zbioru testowego
+roc_auc_log_reg_test = auc(fpr_log_reg_test, tpr_log_reg_test)
+
+# Wykres krzywej ROC
+plt.figure(figsize=(8, 6))
+plt.plot(fpr_log_reg_test, tpr_log_reg_test, color='b', lw=2, label=f'ROC curve (AUC = {roc_auc_log_reg_test:.2f})')
+plt.fill_between(fpr_log_reg_test, tpr_log_reg_test, color='skyblue', alpha=0.4)  # Wypełnienie pod krzywą
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')  # Linia losowa
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve - Best Logistic Regression Model (Test Set)')
+plt.legend(loc='lower right')
+plt.grid(True)
+plt.show()
+
+```
+
+W tym przypadku wartość AUC wynosi 89%.
+
+## Random Forest
+
+**Random Forest** (Las losowy) to jedna z najpopularniejszych i najpotężniejszych metod w uczeniu maszynowym, stosowana głównie do problemów klasyfikacyjnych i regresyjnych.
+Jest to metoda zespołowa, która łączy wyniki wielu drzew decyzyjnych w celu uzyskania bardziej dokładnych i stabilnych prognoz.
+Każde drzewo w lesie jest trenowane na losowej próbce danych, co sprawia, że model jest odporny na przeuczenie (overfitting) i dobrze radzi sobie z danymi o dużej zmienności.
+
+Podstawową ideą Random Forest jest:
+
+1. **Losowe wybieranie próbek** – podczas budowy każdego drzewa, wykorzystywana jest losowa próbka danych (z zamianą).
+2. **Losowe wybieranie cech** – przy każdej próbie podziału w drzewie wybierana jest losowa podgrupa cech, co sprawia, że każde drzewo jest inne.
+3. **Zbieranie wyników** – po zbudowaniu wielu drzew, wynik końcowy jest uzyskiwany na podstawie większościowego głosowania w przypadku klasyfikacji
+
+### Budowa Lasu losowego z parametrami bazowymi
+
+```{python}
+# Trening modelu
+rf_model_basic = RandomForestClassifier(random_state=42)
+rf_model_basic.fit(X_train, y_train)
+
+# Predykcja na zbiorze testowym
+y_pred_rf_basic_test = rf_model_basic.predict(X_test)
+
+# Predykcja na zbiorze uczącym
+y_pred_rf_basic_train = rf_model_basic.predict(X_train)
+
+# Metryki oceny dla zbioru testowego
+accuracy_rf_test = accuracy_score(y_test, y_pred_rf_basic_test)
+recall_rf_test = recall_score(y_test, y_pred_rf_basic_test, pos_label=1)
+specificity_rf_test = specificity_score(y_test, y_pred_rf_basic_test)
+
+# Metryki oceny dla zbioru uczącego
+accuracy_rf_train = accuracy_score(y_train, y_pred_rf_basic_train)
+recall_rf_train = recall_score(y_train, y_pred_rf_basic_train, pos_label=1)
+specificity_rf_train = specificity_score(y_train, y_pred_rf_basic_train)
+
+# Wyświetlenie metryk w tabeli
+metrics_data_rf = {
+    'Metric': ['Accuracy', 'Recall', 'Specificity'],
+    'Train': [accuracy_rf_train, recall_rf_train, specificity_rf_train],
+    'Test': [accuracy_rf_test, recall_rf_test, specificity_rf_test]
+}
+
+metrics_df_rf = pd.DataFrame(metrics_data_rf)
+print(metrics_df_rf)
+
+# Wyświetlenie macierzy konfuzji
+conf_matrix_rf_train = confusion_matrix(y_train, y_pred_rf_basic_train)
+conf_matrix_rf_test = confusion_matrix(y_test, y_pred_rf_basic_test)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Macierz konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_rf_train).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train')
+
+# Macierz konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_rf_test).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test')
+
+plt.tight_layout()
+plt.show()
+
+```
+
+W przypadku parametrów bazowych model nie osiąga zbyt satysfakconujących wyników
+
+### Wybór najlepszego zestawu parametrów
+
+**Parametry do przeszukania w Random Forest**
+
+1.  **`n_estimators` (Liczba drzew)**\
+    Parametr ten określa, ile drzew decyzyjnych zostanie zbudowanych w lesie.
+    Większa liczba drzew może poprawić dokładność modelu, ponieważ redukuje wariancję i zwiększa stabilność prognoz.
+    Jednakże, zbyt duża liczba drzew może prowadzić do dłuższego czasu treningu, bez znaczącej poprawy wyników.
+    W naszym przypadku testujemy wartości 10, 50 i 100 drzew.
+
+2.  **`max_depth` (Maksymalna głębokość drzewa)**\
+    Parametr ten kontroluje maksymalną głębokość każdego drzewa w lesie.
+    Większa głębokość pozwala modelowi uchwycić bardziej złożone zależności w danych, ale może prowadzić do przeuczenia (overfitting) w przypadku danych o wysokiej wariancji.
+    Z drugiej strony, zbyt mała głębokość może skutkować niedouczeniem (underfitting).
+    Testujemy głębokości: **None** (brak ograniczenia), 10, 20 i 30.
+
+3.  **`min_samples_split` (Minimalna liczba próbek do podziału węzła)**\
+    Parametr ten określa minimalną liczbę próbek, które muszą być obecne w węźle, aby mogło dojść do podziału.
+    Wyższa wartość zmniejsza liczbę podziałów w drzewach, co pomaga uniknąć przeuczenia, ale może także obniżyć zdolność modelu do uchwycenia subtelnych zależności w danych.
+    Testujemy wartości: 2, 5 i 10.
+
+4.  **`min_samples_leaf` (Minimalna liczba próbek w liściu)**\
+    Parametr ten kontroluje minimalną liczbę próbek, które muszą znajdować się w liściu drzewa.
+    Zwiększenie tej liczby może zmniejszyć wariancję modelu, eliminując bardzo małe i potencjalnie zbyt specyficzne liście.
+    Zmniejsza to ryzyko przeuczenia.
+    Testujemy wartości: 1, 2 i 4.
+
+```{python}
+# Parametry do przeszukania
+param_grid = {
+    'n_estimators': [10, 50, 100],  # Liczba drzew
+    'max_depth': [None, 10, 20, 30],  # Maksymalna głębokość drzewa
+    'min_samples_split': [2, 5, 10],  # Minimalna liczba próbek do podziału
+    'min_samples_leaf': [1, 2, 4]     # Minimalna liczba próbek w liściu
+}
+
+# Tworzenie obiektu RandomForestClassifier
+rf_model = RandomForestClassifier(random_state=42)
+
+# GridSearchCV do wyszukiwania najlepszych parametrów
+grid_search = GridSearchCV(rf_model, param_grid, cv=None, verbose=4,scoring='accuracy', n_jobs=7)
+grid_search.fit(X_train, y_train)
+
+# Najlepsze parametry
+best_params = grid_search.best_params_
+best_score = grid_search.best_score_
+
+# Model z najlepszymi parametrami
+best_rf_model = RandomForestClassifier(grid_search.best_estimator_)
+print('Best parameters from GridSearchCV:', best_params)
+```
+
+```{python}
+# Najlepszy model z GridSearchCV (już wytrenowany)
+best_rf_model = grid_search.best_estimator_
+
+# Predykcja na zbiorze testowym
+y_pred_rf_best_test = best_rf_model.predict(X_test)
+
+# Predykcja na zbiorze uczącym
+y_pred_rf_best_train = best_rf_model.predict(X_train)
+
+# Obliczenie miar dla zbioru testowego
+accuracy_rf_best_test = accuracy_score(y_test, y_pred_rf_best_test)
+recall_rf_best_test = recall_score(y_test, y_pred_rf_best_test)
+specificity_rf_best_test = recall_score(y_test, y_pred_rf_best_test, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Obliczenie miar dla zbioru uczącego
+accuracy_rf_best_train = accuracy_score(y_train, y_pred_rf_best_train)
+recall_rf_best_train = recall_score(y_train, y_pred_rf_best_train)
+specificity_rf_best_train = recall_score(y_train, y_pred_rf_best_train, pos_label=0)  # Specificity = TN / (TN + FP)
+
+# Wyświetlenie metryk w tabeli
+metrics_data_rf_best = {
+    'Metric': ['Accuracy', 'Recall', 'Specificity'],
+    'Train': [accuracy_rf_best_train, recall_rf_best_train, specificity_rf_best_train],
+    'Test': [accuracy_rf_best_test, recall_rf_best_test, specificity_rf_best_test]
+}
+
+metrics_df_rf_best = pd.DataFrame(metrics_data_rf_best)
+print(metrics_df_rf_best)
+
+# Wyświetlenie macierzy konfuzji
+conf_matrix_rf_best_train = confusion_matrix(y_train, y_pred_rf_best_train)
+conf_matrix_rf_best_test = confusion_matrix(y_test, y_pred_rf_best_test)
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+# Macierz konfuzji dla zbioru uczącego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_rf_best_train).plot(cmap='Blues', ax=ax1);
+ax1.set_title('Confusion Matrix - Train')
+
+# Macierz konfuzji dla zbioru testowego
+ConfusionMatrixDisplay(confusion_matrix=conf_matrix_rf_best_test).plot(cmap='Blues', ax=ax2);
+ax2.set_title('Confusion Matrix - Test')
+
+plt.show()
+```
+
+Wyniki lasu losowego prezentują się bardzo dobrze, z wszystkimi miarami (dokładność, recall, specificity) przekraczającymi 80%. Oznacza to, że model radzi sobie bardzo skutecznie zarówno na danych treningowych, jak i testowych, co sugeruje jego dobrą generalizację. Dzięki wysokiej czułości i specyficzności model wykazuje solidne zdolności do wykrywania zarówno pozytywnych, jak i negatywnych przypadków, 
+
+### Krzywa ROC i AUC
+
+```{python}
+# Obliczenie prawdopodobieństw klasy pozytywnej dla zbioru testowego
+y_prob_rf_best_test = best_rf_model.predict_proba(X_test)[:, 1]
+
+# Obliczenie krzywej ROC dla zbioru testowego
+fpr_rf_test, tpr_rf_test, thresholds_rf_test = roc_curve(y_test, y_prob_rf_best_test)
+
+# Obliczenie AUC dla zbioru testowego
+roc_auc_rf_test = auc(fpr_rf_test, tpr_rf_test)
+
+# Wykres krzywej ROC
+plt.figure(figsize=(8, 6))
+plt.plot(fpr_rf_test, tpr_rf_test, color='b', lw=2, label=f'ROC curve (AUC = {roc_auc_rf_test:.2f})')
+plt.fill_between(fpr_rf_test, tpr_rf_test, color='skyblue', alpha=0.4)  # Wypełnienie pod krzywą
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--')  # Linia losowa
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve - Best Random Forest Model (Test Set)')
+plt.legend(loc='lower right')
+plt.grid(True)
+plt.show()
+```
+
+Model stworzony na bazie Lasu losowego prezentuje najlepszą dokłądność z wartością AUC na poziomie 92%.
+
+### Ocena ważności zmiennych
+
+```{python}
+# Ocena ważności zmiennych
+importances = best_rf_model.estimators_[0].feature_importances_
+feature_names = X_train.columns  # Upewnij się, że masz nazwane kolumny w danych
+importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+importance_df = importance_df.sort_values(by='Importance', ascending=False)
+
+# Wizualizacja ważności zmiennych
+plt.figure(figsize=(10, 6))
+plt.barh(importance_df['Feature'], importance_df['Importance'], color='lightgreen')
+plt.xlabel('Importance')
+plt.ylabel('Features')
+plt.title('Feature Importance in Random Forest')
+plt.gca().invert_yaxis()  # Odwróć oś Y dla lepszej czytelności
+plt.show()
+```
+
+Wyniki pokazują, że najbardziej istotne zmienne, takie jak educational-num, capital-net, never-married, separated oraz age, mają znaczący wpływ na prognozowanie wyniku. Może to wskazywać, że wykształcenie, stan majątkowy oraz status cywilny są kluczowe przy przewidywaniu poziomu dochodówczy wiek odgrywają istotną rolę, co jest zgodne z intuicyjnymi zależnościami społecznymi i ekonomicznymi.
+
+## Porównanie jakości modeli przy pomocy krzywj ROC i wartośći AUC
+
+```{python}
+# Wykres krzywych ROC dla trzech modeli
+plt.figure(figsize=(10, 8))
+
+# Dodanie krzywych ROC do wykresu
+plt.plot(fpr_rf_test, tpr_rf_test, color='darkgreen', lw=2, label=f'Random Forest (AUC = {roc_auc_rf_test:.2f})');
+plt.plot(fpr_log_reg_test, tpr_log_reg_test, color='darkorange', lw=2, label=f'Logistic Regression (AUC = {roc_auc_log_reg_test:.2f})');
+plt.plot(fpr_knn_test_best, tpr_knn_test_best, color='darkblue', lw=2, label=f'KNN (AUC = {roc_auc_knn_test_best:.2f})');
+
+# Linia losowa
+plt.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--');
+
+# Dodanie tytułów i etykiet osi
+plt.title('ROC Curves Comparison - All Models (Test Set)', fontsize=16, fontweight='bold');
+plt.xlabel('False Positive Rate (FPR)', fontsize=14);
+plt.ylabel('True Positive Rate (TPR)', fontsize=14);
+
+# Dodanie legendy
+plt.legend(loc='lower right', fontsize=12);
+
+# Dodanie siatki i poprawa wyglądu
+plt.grid(True, linestyle='--', alpha=0.7);
+
+# Wyświetlenie wykresu
+plt.tight_layout();
+plt.show();
+
+
+```
+
+Najlepszym modelem okazał się ten zbudowany przez użycie metody lasów losowych
+
+# Analiza Interpretowalności wybranego modelu
+
+## Analiza częściowej zależności
+
+
+```{python}
+from sklearn.inspection import PartialDependenceDisplay
+
+# Wybieramy tylko te cechy, które są najbardziej istotne
+important_features = ['educational-num', 'capital-net']
+
+# Tworzymy wykresy dla wybranych cech
+fig, ax = plt.subplots(1, 2, figsize=(14, 6), constrained_layout=True)  # Dostosowujemy układ do dwóch cech
+
+for i, axi in enumerate(ax.flat):
+    if i < len(important_features):  # Sprawdzamy, czy istnieje taka cecha
+        # Wybieramy numer kolumny dla danej cechy w oryginalnym zbiorze danych
+        feature_idx = X_train_scaled.columns.get_loc(important_features[i])
+
+        # Tworzymy wykres zależności częściowej
+        PartialDependenceDisplay.from_estimator(
+            best_knn_model,
+            X_train_scaled[:1000],  # Używamy próbki 1000 wierszy
+            features=[feature_idx],  # Numer kolumny cechy
+            feature_names=X_train_scaled.columns,  # Używamy pełnej listy nazw cech
+            ax=axi,
+        )
+        axi.set_title(f"Część. zależność - {important_features[i]}")
+
+plt.show()
+
+
+
+```
+
+Wykonano wykresy zależności częściowych (Partial Dependence Plots, PDP) dla dwóch istotnych zmiennych: educational-num (numer wykształcenia) oraz capital-net (dochód netto). Celem tych wykresów jest zobrazowanie wpływu wybranych cech na przewidywaną zmienną wyjściową (w tym przypadku poziom dochodu) przy stałych wartościach innych zmiennych. Na podstawie analizy wstępnej danych, wybrano dwie cechy, które mają największy wpływ na wynik modelu: educational-num i capital-net. Zmienna educational-num reprezentuje poziom wykształcenia (liczba lat nauki), a capital-net to dochód netto danej osoby. Wykresy te pokazują, jak zmienia się przewidywana wartość modelu (np. poziom dochodu) w zależności od zmiany jednej z cech, podczas gdy inne cechy są trzymane na stałym poziomie.I tak widzimy ze wzrost cech powoduje zwiekszenie potencjalnego dochodu
+
+# Podsumowanie
+
+Celem projektu była analiza skuteczności różnych metod klasyfikacyjnych (K-Nearest Neighbors, Regresja Logistyczna, Random Forest) w kontekście prognozowania danych dotyczących poziomu dochodów. W projekcie zastosowano różne podejścia do optymalizacji modeli oraz dobrania najlepszych parametrów, a także przeanalizowano wyniki uzyskane na zbiorach uczącym i testowym.
+Pod względem jakości modelu Random Forest okazał się najskuteczniejszy, osiągając najwyższą dokładność oraz wartość AUC. Regresja Logistyczna osiągnęła bardzo wysokie wyniki, jednak nieznacznie gorsze od lasu losowego, podczas gdy K-Nearest Neighbors oferował dobre wyniki, ale wymagał dalszej optymalizacji, aby uzyskać stabilniejszy model. Stworzono również wizualizacje instotności cech w kontekscie lasu losowego oraz KNN, z których wynikało że największy wpływ na dochod ma liczba la tedukacji oraz zysk kapitałowy.
+
+**Podsumowanie wyników AUC:**
+
+- KNN: AUC = 90%
+- Logistic Regression: AUC = 89%
+- Random Forest: AUC = 92%
+
+Random Forest okazał się najlepszym modelem do przewidywania poziomu dochodów na podstawie dostępnych cech, co pokazuje jego wyższa odporność na przeuczenie i lepsza generalizacja w porównaniu do innych metod.
+
+
